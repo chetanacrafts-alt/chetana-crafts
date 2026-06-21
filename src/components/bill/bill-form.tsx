@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { AlertTriangle, Eye, Plus, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,7 +34,7 @@ import {
   type BillType,
   type DiscountMode,
 } from "@/lib/billing";
-import type { StockItem } from "@/lib/types";
+import type { Order, StockItem } from "@/lib/types";
 
 function emptyRow(): BillLineRow {
   return { uid: genId(), code: "", name: "", qty: "", price: "" };
@@ -42,19 +42,13 @@ function emptyRow(): BillLineRow {
 
 interface BillFormProps {
   stock: StockItem[];
+  orders: Order[];
   onPreview: (payload: BillPayload) => void;
   onSave: (payload: BillPayload) => void;
 }
 
-export function BillForm({ stock, onPreview, onSave }: BillFormProps) {
-  // Empty on the initial (server-matching) render, filled in after mount —
-  // generateBillNo() uses Math.random(), so computing it during the render
-  // that SSR also produces would cause a hydration mismatch.
-  const [billNo, setBillNo] = useState("");
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time client-only random value, see comment above
-    setBillNo(generateBillNo());
-  }, []);
+export function BillForm({ stock, orders, onPreview, onSave }: BillFormProps) {
+  const billNo = generateBillNo(orders);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [addr, setAddr] = useState("");

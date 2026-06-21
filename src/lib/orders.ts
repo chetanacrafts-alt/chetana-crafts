@@ -32,7 +32,11 @@ function computeOrderPayment(
   return { paidAmount: round2(paidAmount), dueAmount: round2(dueAmount) };
 }
 
-export function buildOrderFromInput(input: OrderInput, id: string = genId()): Order {
+export function buildOrderFromInput(
+  input: OrderInput,
+  id: string = genId(),
+  billNo: string = ""
+): Order {
   const { paidAmount, dueAmount } = computeOrderPayment(
     input.price,
     input.qty,
@@ -41,6 +45,7 @@ export function buildOrderFromInput(input: OrderInput, id: string = genId()): Or
   );
   return {
     id,
+    billNo,
     date: input.date,
     name: input.name,
     phone: input.phone,

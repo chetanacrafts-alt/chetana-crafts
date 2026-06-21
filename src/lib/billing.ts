@@ -1,3 +1,5 @@
+import type { Order } from "@/lib/types";
+
 export type BillType = "GST" | "Cash";
 export type DiscountMode = "flat" | "percent";
 
@@ -51,15 +53,18 @@ export interface ComputeBillTotalsInput {
   amountPaid: number;
 }
 
-/** A human-readable, date-anchored reference printed on the bill — generated
- * once per form session, not a true gapless sequence number. */
-export function generateBillNo(): string {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  const d = String(now.getDate()).padStart(2, "0");
-  const rand = Math.random().toString(36).slice(2, 6).toUpperCase();
-  return `INV-${y}${m}${d}-${rand}`;
+const INVOICE_NO_PATTERN = /^INV-(\d+)$/;
+
+/** Next sequential invoice number, derived from the highest one already saved
+ * on an order. Re-derived from data (not an incrementing counter) so an
+ * abandoned bill never burns a number, and it stays correct across devices
+ * after a Sheet sync. */
+export function generateBillNo(existingOrders: Order[]): string {
+  const max = existingOrders.reduce((m, o) => {
+    const match = INVOICE_NO_PATTERN.exec(o.billNo ?? "");
+    return match ? Math.max(m, Number(match[1])) : m;
+  }, 0);
+  return `INV-${String(max + 1).padStart(4, "0")}`;
 }
 
 export function computeBillTotals(input: ComputeBillTotalsInput): BillTotals {

@@ -81,6 +81,7 @@ export function OrdersTable({
     downloadCSV(
       `chetana-orders-${todayISO()}.csv`,
       filtered.map((o) => ({
+        BillNo: o.billNo,
         Date: o.date,
         Customer: o.name,
         Phone: o.phone,
@@ -150,6 +151,7 @@ export function OrdersTable({
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead>Bill No</TableHead>
                 <TableHead>Date</TableHead>
                 <TableHead>Customer</TableHead>
                 <TableHead>Product</TableHead>
@@ -162,6 +164,7 @@ export function OrdersTable({
             <TableBody>
               {filtered.map((order) => (
                 <TableRow key={order.id}>
+                  <TableCell className="text-muted-foreground">{order.billNo || "—"}</TableCell>
                   <TableCell className="text-muted-foreground">{formatDate(order.date)}</TableCell>
                   <TableCell>
                     <p className="font-medium">{order.name}</p>

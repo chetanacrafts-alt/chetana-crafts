@@ -46,7 +46,7 @@ export default function OrdersPage() {
   }
 
   function handleSubmit(input: OrderInput) {
-    const order = buildOrderFromInput(input, editingId ?? undefined);
+    const order = buildOrderFromInput(input, editingId ?? undefined, editingOrder?.billNo ?? "");
 
     setDB((prev) => (editingId ? applyOrderEdit(prev, order) : applyOrder(prev, order)));
 

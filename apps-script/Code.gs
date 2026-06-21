@@ -11,7 +11,7 @@
  */
 
 var SCHEMAS = {
-  orders: ["id", "date", "name", "phone", "channel", "product", "price", "cost", "qty", "status", "stockCode", "payMode", "paidAmount", "dueAmount", "notify"],
+  orders: ["id", "billNo", "date", "name", "phone", "channel", "product", "price", "cost", "qty", "status", "stockCode", "payMode", "paidAmount", "dueAmount", "notify"],
   stock: ["id", "code", "name", "cat", "color", "source", "cost", "sell", "qty", "low"],
   expenses: ["id", "date", "name", "amt", "cat"],
   purchases: ["id", "date", "supplier", "city", "items", "total", "extra"],

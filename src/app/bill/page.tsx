@@ -36,6 +36,7 @@ export default function BillPage() {
 
         return {
           id: genId(),
+          billNo: payload.billNo,
           date: payload.date,
           name: payload.customer.name,
           phone: payload.customer.phone,
@@ -105,7 +106,13 @@ export default function BillPage() {
   return (
     <div className="flex flex-col gap-6">
       <h1 className="text-2xl font-medium sm:text-3xl">Bill</h1>
-      <BillForm key={formKey} stock={db.stock} onPreview={handlePreview} onSave={handleSaveOrder} />
+      <BillForm
+        key={formKey}
+        stock={db.stock}
+        orders={db.orders}
+        onPreview={handlePreview}
+        onSave={handleSaveOrder}
+      />
       <BillPreviewDialog
         payload={previewPayload}
         settings={db.settings}

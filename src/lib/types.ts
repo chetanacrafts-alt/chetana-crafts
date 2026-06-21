@@ -1,5 +1,6 @@
 export interface Order {
   id: string;
+  billNo: string;
   date: string;
   name: string;
   phone: string;
