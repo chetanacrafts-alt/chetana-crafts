@@ -8,7 +8,7 @@ import { StockTable } from "@/components/stock/stock-table";
 import type { StockItem } from "@/lib/types";
 
 export default function StockPage() {
-  const { db, setDB } = useData();
+  const { db, setDB, initialSyncAttempted } = useData();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formKey, setFormKey] = useState(0);
   const editingItem = editingId
@@ -40,6 +40,7 @@ export default function StockPage() {
         key={editingItem ? editingItem.id : `new-${formKey}`}
         stock={db.stock}
         editingItem={editingItem}
+        ready={initialSyncAttempted}
         onSubmit={handleSubmit}
         onCancelEdit={() => setEditingId(null)}
       />

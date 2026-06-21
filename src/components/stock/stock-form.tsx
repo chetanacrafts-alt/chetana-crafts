@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Save, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,6 +29,7 @@ import type { StockItem } from "@/lib/types";
 interface StockFormProps {
   stock: StockItem[];
   editingItem: StockItem | null;
+  ready: boolean;
   onSubmit: (item: StockItem) => void;
   onCancelEdit: () => void;
 }
@@ -39,11 +40,24 @@ interface StockFormProps {
 export function StockForm({
   stock,
   editingItem,
+  ready,
   onSubmit,
   onCancelEdit,
 }: StockFormProps) {
   const isEditing = !!editingItem;
   const [code, setCode] = useState(editingItem?.code ?? nextStockCode(stock));
+  const [codeEdited, setCodeEdited] = useState(false);
+
+  // The suggested code is computed from whatever `stock` is available at
+  // mount, which on a fresh device/session can still be the (empty) local
+  // cache before the initial sync pull resolves — re-deriving here once real
+  // data arrives avoids suggesting an already-used code. Skipped once the
+  // user types their own code, or while editing an existing item.
+  useEffect(() => {
+    if (isEditing || codeEdited) return;
+    setCode(nextStockCode(stock));
+  }, [stock, isEditing, codeEdited]);
+
   const [name, setName] = useState(editingItem?.name ?? "");
   const [cat, setCat] = useState<string>(editingItem?.cat ?? STOCK_CATEGORIES[0]);
   const [color, setColor] = useState(editingItem?.color ?? "");
@@ -54,7 +68,11 @@ export function StockForm({
   const [low, setLow] = useState(editingItem ? String(editingItem.low) : "2");
 
   const duplicate = isDuplicateCode(stock, code, editingItem?.id);
-  const canSubmit = name.trim() !== "" && !duplicate;
+  // For a brand-new item, the suggested code depends on `stock` already
+  // reflecting the server — block save until the initial sync has at least
+  // been attempted, so a fresh device can't silently create a duplicate code.
+  // Editing an existing item carries no such risk.
+  const canSubmit = name.trim() !== "" && !duplicate && (isEditing || ready);
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -90,7 +108,10 @@ export function StockForm({
             <Input
               id="stock-code"
               value={code}
-              onChange={(e) => setCode(e.target.value)}
+              onChange={(e) => {
+                setCode(e.target.value);
+                setCodeEdited(true);
+              }}
               placeholder="CC-001"
             />
             {duplicate && (
@@ -194,7 +215,9 @@ export function StockForm({
             </Button>
           )}
           <Button type="submit" disabled={!canSubmit}>
-            {isEditing ? (
+            {!isEditing && !ready ? (
+              "Checking…"
+            ) : isEditing ? (
               <>
                 <Save className="size-4" />
                 Save changes

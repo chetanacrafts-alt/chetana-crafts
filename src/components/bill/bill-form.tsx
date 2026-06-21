@@ -43,11 +43,12 @@ function emptyRow(): BillLineRow {
 interface BillFormProps {
   stock: StockItem[];
   orders: Order[];
+  ready: boolean;
   onPreview: (payload: BillPayload) => void;
   onSave: (payload: BillPayload) => void;
 }
 
-export function BillForm({ stock, orders, onPreview, onSave }: BillFormProps) {
+export function BillForm({ stock, orders, ready, onPreview, onSave }: BillFormProps) {
   const billNo = generateBillNo(orders);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -93,7 +94,11 @@ export function BillForm({ stock, orders, onPreview, onSave }: BillFormProps) {
   });
 
   const gstWarning = hasGstRateWarning(billType, Number(gstRate), items);
-  const canSubmit = name.trim() !== "" && items.length > 0;
+  // Until the initial sync has at least been attempted, `orders` may not yet
+  // reflect bills created on another device — saving now risks reusing an
+  // invoice number that's already taken. The wait is bounded to one sync
+  // attempt (succeeds or fails fast), not indefinite.
+  const canSubmit = name.trim() !== "" && items.length > 0 && ready;
 
   function buildPayload(): BillPayload {
     return {
@@ -123,7 +128,7 @@ export function BillForm({ stock, orders, onPreview, onSave }: BillFormProps) {
         </div>
         {billNo && (
           <span className="shrink-0 rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">
-            {billNo}
+            {ready ? billNo : "Checking…"}
           </span>
         )}
       </CardHeader>

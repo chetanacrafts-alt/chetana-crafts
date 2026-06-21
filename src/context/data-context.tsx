@@ -9,7 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { toast } from "sonner";
+import { usePathname } from "next/navigation";
 import type { ChetanaDB } from "@/lib/types";
 import {
   defaultDB,
@@ -29,6 +29,7 @@ const SUPPRESS_POLL_AFTER_PUSH_MS = 8000;
 interface DataContextValue {
   db: ChetanaDB;
   hydrated: boolean;
+  initialSyncAttempted: boolean;
   setDB: (updater: ChetanaDB | ((prev: ChetanaDB) => ChetanaDB)) => void;
   syncStatus: SyncStatus;
   lastSyncedAt: string | null;
@@ -41,6 +42,7 @@ interface DataContextValue {
 const DataContext = createContext<DataContextValue | null>(null);
 
 export function DataProvider({ children }: { children: ReactNode }) {
+  const pathname = usePathname();
   const [db, setDbState] = useState<ChetanaDB>(() => defaultDB());
   const [hydrated, setHydrated] = useState(false);
   // Only ever set from callbacks (mount pull/poll/push), never from an effect body.
@@ -55,6 +57,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
   // with nothing. Flips true on the first successful pull, or on eraseAll/
   // restoreJSON, which intentionally push a known-good local state.
   const [canPush, setCanPush] = useState(false);
+  // True once the first pull attempt has finished, success or failure. Used
+  // to briefly hold back UI that suggests a value derived from existing data
+  // (next invoice number, next stock code) — on a brand-new device, that data
+  // may still be the empty default for the first second or two, and acting on
+  // it (e.g. saving) could create a real collision once the real data lands.
+  // Bounded to one attempt, not gated on success, so offline use is never
+  // blocked indefinitely.
+  const [initialSyncAttempted, setInitialSyncAttempted] = useState(false);
 
   const dbRef = useRef(db);
   const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -65,6 +75,15 @@ export function DataProvider({ children }: { children: ReactNode }) {
   // order and have a stale one win — see pushNow below.
   const pushInFlight = useRef(false);
   const pushQueued = useRef(false);
+  // localVersion bumps on every real local edit (setDB). pushedVersion records
+  // the version that was last successfully confirmed-pushed. A pull is only
+  // allowed to overwrite local state when the two match — i.e. there is no
+  // local edit, old or brand new, that the server doesn't already have. A
+  // pull that resolves slowly (e.g. the initial mount pull racing a quick
+  // edit right after) would otherwise blindly replace state and silently
+  // discard whatever the user just did.
+  const localVersion = useRef(0);
+  const pushedVersion = useRef(0);
 
   const syncStatus: SyncStatus = !isOnline ? "offline" : phase;
 
@@ -93,7 +112,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
       if (!options.silent) setPhase("syncing");
       try {
         const data = await pullDB();
-        mergeFromServer(data);
+        // Only adopt the server's state if nothing local is still unpushed —
+        // otherwise this pull is stale relative to an edit already in flight
+        // (or about to be) and applying it would silently lose that edit.
+        if (localVersion.current === pushedVersion.current) {
+          mergeFromServer(data);
+        }
         const now = new Date().toISOString();
         persistLastSyncedAt(now);
         setLastSyncedAtState(now);
@@ -103,6 +127,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         setPhase("error");
       } finally {
         pullInFlight.current = false;
+        setInitialSyncAttempted(true);
       }
     },
     [mergeFromServer]
@@ -121,6 +146,21 @@ export function DataProvider({ children }: { children: ReactNode }) {
     pullFromServer({ silent: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only
   }, []);
+
+  // DataProvider lives in the root layout, so it's already mounted (and has
+  // already run its one mount-time pull) while the user is still on the
+  // unauthenticated /login page — that pull 401s, which is expected. Logging
+  // in navigates to "/" via the router (no full page reload), so DataProvider
+  // never remounts and never retries automatically. Re-pull specifically on
+  // the /login -> elsewhere transition so the badge and data don't stay
+  // stuck on that initial failed attempt for the rest of the session.
+  const prevPathname = useRef(pathname);
+  useEffect(() => {
+    if (prevPathname.current === "/login" && pathname !== "/login") {
+      pullFromServer({ silent: false });
+    }
+    prevPathname.current = pathname;
+  }, [pathname, pullFromServer]);
 
   useEffect(() => {
     function handleOnline() {
@@ -185,10 +225,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
     pushInFlight.current = true;
     setPhase("syncing");
     try {
+      let versionPushed = pushedVersion.current;
       do {
         pushQueued.current = false;
+        versionPushed = localVersion.current;
         await pushDB(dbRef.current);
       } while (pushQueued.current);
+      pushedVersion.current = versionPushed;
       lastPushAt.current = Date.now();
       const now = new Date().toISOString();
       persistLastSyncedAt(now);
@@ -223,6 +266,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
   const setDB = useCallback(
     (updater: ChetanaDB | ((prev: ChetanaDB) => ChetanaDB)) => {
+      localVersion.current += 1;
       setDbState((prev) =>
         typeof updater === "function"
           ? (updater as (prev: ChetanaDB) => ChetanaDB)(prev)
@@ -255,6 +299,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const restoreJSON = useCallback(async (file: File) => {
     const text = await file.text();
     const parsed = parseImportedDB(text);
+    localVersion.current += 1;
     setDbState(parsed);
     dbRef.current = parsed;
     setCanPush(true);
@@ -263,6 +308,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
   const eraseAll = useCallback(async () => {
     const empty = defaultDB();
+    localVersion.current += 1;
     setDbState(empty);
     dbRef.current = empty;
     setCanPush(true);
@@ -274,6 +320,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       value={{
         db,
         hydrated,
+        initialSyncAttempted,
         setDB,
         syncStatus,
         lastSyncedAt,

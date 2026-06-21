@@ -44,28 +44,35 @@ export function OnlineSaleForm({ stock, onSubmit }: OnlineSaleFormProps) {
   const [cost, setCost] = useState("");
   const [status, setStatus] = useState<string>(ORDER_STATUSES[0]);
   const [valueEdited, setValueEdited] = useState(false);
+  const [costEdited, setCostEdited] = useState(false);
 
   function handleStockSelect(code: string) {
     setStockCode(code);
     const match = findStockByCode(stock, code);
     if (match) {
       setProduct(match.name);
-      setCost(String(match.cost));
+      if (!costEdited) setCost(String(match.cost * (Number(qty) || 1)));
       if (!valueEdited) setValue(String(match.sell * (Number(qty) || 1)));
     }
   }
 
   function handleQtyChange(next: string) {
     setQty(next);
-    if (!valueEdited) {
-      const match = findStockByCode(stock, stockCode);
-      if (match) setValue(String(match.sell * (Number(next) || 0)));
+    const match = findStockByCode(stock, stockCode);
+    if (match) {
+      if (!costEdited) setCost(String(match.cost * (Number(next) || 0)));
+      if (!valueEdited) setValue(String(match.sell * (Number(next) || 0)));
     }
   }
 
   function handleValueChange(next: string) {
     setValue(next);
     setValueEdited(true);
+  }
+
+  function handleCostChange(next: string) {
+    setCost(next);
+    setCostEdited(true);
   }
 
   const payout = Math.max(0, (Number(value) || 0) - (Number(fee) || 0) - (Number(shipping) || 0));
@@ -97,6 +104,7 @@ export function OnlineSaleForm({ stock, onSubmit }: OnlineSaleFormProps) {
     setShipping("");
     setCost("");
     setValueEdited(false);
+    setCostEdited(false);
   }
 
   return (
@@ -241,7 +249,7 @@ export function OnlineSaleForm({ stock, onSubmit }: OnlineSaleFormProps) {
                 inputMode="decimal"
                 min="0"
                 value={cost}
-                onChange={(e) => setCost(e.target.value)}
+                onChange={(e) => handleCostChange(e.target.value)}
                 placeholder="0"
               />
             </div>

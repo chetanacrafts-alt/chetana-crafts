@@ -13,7 +13,7 @@ import type { BillPayload } from "@/lib/billing";
 import type { Order } from "@/lib/types";
 
 export default function BillPage() {
-  const { db, setDB } = useData();
+  const { db, setDB, initialSyncAttempted } = useData();
   const [formKey, setFormKey] = useState(0);
   const [previewPayload, setPreviewPayload] = useState<BillPayload | null>(null);
   const [previewCommitted, setPreviewCommitted] = useState(false);
@@ -110,6 +110,7 @@ export default function BillPage() {
         key={formKey}
         stock={db.stock}
         orders={db.orders}
+        ready={initialSyncAttempted}
         onPreview={handlePreview}
         onSave={handleSaveOrder}
       />
