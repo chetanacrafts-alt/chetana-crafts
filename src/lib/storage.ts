@@ -1,5 +1,8 @@
 import type { ChetanaDB } from "@/lib/types";
 
+// Local cache only — the source of truth is Supabase, reached via /api/db
+// (see src/lib/api-sync.ts). This lets the app paint instantly and tolerate
+// brief offline stretches, reconciling with the server once back online.
 export const DB_KEY = "chetana_crafts_db_v1";
 
 export function defaultDB(): ChetanaDB {
@@ -66,4 +69,16 @@ export function getLastBackupAt(): string | null {
 export function setLastBackupAt(iso: string): void {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(LAST_BACKUP_KEY, iso);
+}
+
+const LAST_SYNCED_KEY = "chetana_crafts_last_synced_v1";
+
+export function getLastSyncedAt(): string | null {
+  if (typeof window === "undefined") return null;
+  return window.localStorage.getItem(LAST_SYNCED_KEY);
+}
+
+export function setLastSyncedAt(iso: string): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(LAST_SYNCED_KEY, iso);
 }

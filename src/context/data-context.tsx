@@ -18,31 +18,23 @@ import {
   parseImportedDB,
   getLastBackupAt,
   setLastBackupAt as persistLastBackupAt,
-} from "@/lib/storage";
-import {
-  type SyncStatus,
-  getSheetUrl,
-  setSheetUrl as persistSheetUrl,
-  clearSheetUrl,
   getLastSyncedAt,
   setLastSyncedAt as persistLastSyncedAt,
-  writeAllToSheet,
-  readFromSheet,
-} from "@/lib/sync";
+} from "@/lib/storage";
+import { type SyncStatus, pushDB, pullDB } from "@/lib/api-sync";
+
+const POLL_INTERVAL_MS = 25000;
+const SUPPRESS_POLL_AFTER_PUSH_MS = 8000;
 
 interface DataContextValue {
   db: ChetanaDB;
   hydrated: boolean;
   setDB: (updater: ChetanaDB | ((prev: ChetanaDB) => ChetanaDB)) => void;
-  sheetUrl: string | null;
   syncStatus: SyncStatus;
   lastSyncedAt: string | null;
-  connectSheet: (url: string) => Promise<void>;
-  refreshFromSheet: () => Promise<void>;
-  disconnectSheet: () => void;
   backupJSON: () => void;
   restoreJSON: (file: File) => Promise<void>;
-  eraseAll: () => void;
+  eraseAll: () => Promise<void>;
   lastBackupAt: string | null;
 }
 
@@ -51,86 +43,183 @@ const DataContext = createContext<DataContextValue | null>(null);
 export function DataProvider({ children }: { children: ReactNode }) {
   const [db, setDbState] = useState<ChetanaDB>(() => defaultDB());
   const [hydrated, setHydrated] = useState(false);
-  const [sheetUrl, setSheetUrlState] = useState<string | null>(null);
-  // Only ever set from callbacks (connect/refresh/push), never from an effect body.
+  // Only ever set from callbacks (mount pull/poll/push), never from an effect body.
   // The exported `syncStatus` below folds in connectivity so the badge reflects
   // "Offline" instantly without needing to set it from inside an effect.
   const [phase, setPhase] = useState<SyncStatus>("offline");
   const [lastSyncedAt, setLastSyncedAtState] = useState<string | null>(null);
   const [lastBackupAt, setLastBackupAtState] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(true);
+  // Gates the debounced auto-push — until the first pull succeeds, the local
+  // cache may still be empty/stale, so pushing it would overwrite the server
+  // with nothing. Flips true on the first successful pull, or on eraseAll/
+  // restoreJSON, which intentionally push a known-good local state.
+  const [canPush, setCanPush] = useState(false);
 
   const dbRef = useRef(db);
   const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastPushAt = useRef(0);
+  const pullInFlight = useRef(false);
+  // Serializes pushes so two overlapping requests can never complete out of
+  // order and have a stale one win — see pushNow below.
+  const pushInFlight = useRef(false);
+  const pushQueued = useRef(false);
 
-  const syncStatus: SyncStatus = !sheetUrl || !isOnline ? "offline" : phase;
+  const syncStatus: SyncStatus = !isOnline ? "offline" : phase;
 
   useEffect(() => {
     dbRef.current = db;
   }, [db]);
 
-  // Hydrate from localStorage after mount. This must run in an effect (not during
-  // render) so the very first paint matches the server-rendered HTML before we
-  // swap in the real browser-only data — otherwise React would report a hydration
-  // mismatch.
+  // Merges server data into local state, preserving purchase photos (which
+  // never leave the device — the server never has them).
+  const mergeFromServer = useCallback((data: ChetanaDB) => {
+    setDbState((prev) => {
+      const photoById = new Map(prev.purchases.map((p) => [p.id, p.photo]));
+      const purchases = data.purchases.map((p) => ({
+        ...p,
+        photo: photoById.get(p.id) ?? "",
+      }));
+      return { ...data, purchases };
+    });
+  }, []);
+
+  const pullFromServer = useCallback(
+    async (options: { silent: boolean }) => {
+      if (pullInFlight.current) return;
+      if (!options.silent && Date.now() - lastPushAt.current < SUPPRESS_POLL_AFTER_PUSH_MS) return;
+      pullInFlight.current = true;
+      if (!options.silent) setPhase("syncing");
+      try {
+        const data = await pullDB();
+        mergeFromServer(data);
+        const now = new Date().toISOString();
+        persistLastSyncedAt(now);
+        setLastSyncedAtState(now);
+        setPhase("synced");
+        setCanPush(true);
+      } catch {
+        setPhase("error");
+      } finally {
+        pullInFlight.current = false;
+      }
+    },
+    [mergeFromServer]
+  );
+
+  // Hydrate from the local cache after mount (instant paint), then reconcile
+  // with Supabase. This must run in an effect (not during render) so the very
+  // first paint matches the server-rendered HTML before we swap in real data.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time load from localStorage/navigator on mount, see comment above
     setDbState(loadDB());
-    setSheetUrlState(getSheetUrl());
     setLastSyncedAtState(getLastSyncedAt());
     setLastBackupAtState(getLastBackupAt());
     setIsOnline(typeof navigator === "undefined" ? true : navigator.onLine);
     setHydrated(true);
+    pullFromServer({ silent: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only
   }, []);
 
   useEffect(() => {
     function handleOnline() {
       setIsOnline(true);
+      pullFromServer({ silent: true });
     }
     function handleOffline() {
       setIsOnline(false);
     }
+    function handleFocus() {
+      pullFromServer({ silent: true });
+    }
+    function handleVisibility() {
+      if (document.visibilityState === "visible") pullFromServer({ silent: true });
+    }
     window.addEventListener("online", handleOnline);
     window.addEventListener("offline", handleOffline);
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibility);
     return () => {
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, []);
+  }, [pullFromServer]);
 
-  // Persist every change to localStorage (works fully offline).
+  // Periodic background pull — replaces the old manual "Refresh from Sheet"
+  // button, so changes made on another device show up automatically.
+  useEffect(() => {
+    if (!hydrated) return;
+    pollTimer.current = setInterval(() => {
+      if (document.visibilityState === "visible") pullFromServer({ silent: true });
+    }, POLL_INTERVAL_MS);
+    return () => {
+      if (pollTimer.current) clearInterval(pollTimer.current);
+    };
+  }, [hydrated, pullFromServer]);
+
+  // Persist every change to the local cache (works fully offline).
   useEffect(() => {
     if (!hydrated) return;
     persistDB(db);
   }, [db, hydrated]);
 
-  const pushToSheet = useCallback(async () => {
-    if (!sheetUrl || !isOnline) return;
+  // The actual push, with no gating — used directly by callers (eraseAll,
+  // restoreJSON) that already know they want to push a specific known-good
+  // state right now, regardless of whether the initial pull has resolved.
+  //
+  // Pushes are serialized (never sent concurrently): if one is already in
+  // flight, this just marks another push as queued and returns — the
+  // in-flight push, on completion, re-pushes whatever is current in dbRef.
+  // Without this, an earlier-started auto-push and a later explicit push
+  // (e.g. eraseAll) could resolve out of order over the network, letting the
+  // stale one silently win and undo the newer one.
+  const pushNow = useCallback(async () => {
+    if (!isOnline) return;
+    if (pushInFlight.current) {
+      pushQueued.current = true;
+      return;
+    }
+    pushInFlight.current = true;
     setPhase("syncing");
     try {
-      await writeAllToSheet(sheetUrl, dbRef.current);
+      do {
+        pushQueued.current = false;
+        await pushDB(dbRef.current);
+      } while (pushQueued.current);
+      lastPushAt.current = Date.now();
       const now = new Date().toISOString();
       persistLastSyncedAt(now);
       setLastSyncedAtState(now);
       setPhase("synced");
     } catch {
       setPhase("error");
+    } finally {
+      pushInFlight.current = false;
     }
-  }, [sheetUrl, isOnline]);
+  }, [isOnline]);
 
-  // Debounced auto-sync whenever data changes, and whenever connectivity returns.
-  // "Offline" itself is derived in `syncStatus` above, so this effect only ever
-  // needs to schedule (or skip) the debounced push — no setState in the body.
+  // Gated wrapper for the automatic debounced push — never fires before the
+  // first successful pull, so a fresh/stale local cache can't race ahead of
+  // reconciliation and overwrite the server (see canPush comment above).
+  const pushToServer = useCallback(async () => {
+    if (!canPush) return;
+    await pushNow();
+  }, [canPush, pushNow]);
+
+  // Debounced auto-push whenever data changes.
   useEffect(() => {
-    if (!hydrated || !sheetUrl || !isOnline) return;
+    if (!hydrated || !isOnline || !canPush) return;
     if (syncTimer.current) clearTimeout(syncTimer.current);
     syncTimer.current = setTimeout(() => {
-      pushToSheet();
+      pushToServer();
     }, 800);
     return () => {
       if (syncTimer.current) clearTimeout(syncTimer.current);
     };
-  }, [db, hydrated, sheetUrl, isOnline, pushToSheet]);
+  }, [db, hydrated, isOnline, canPush, pushToServer]);
 
   const setDB = useCallback(
     (updater: ChetanaDB | ((prev: ChetanaDB) => ChetanaDB)) => {
@@ -142,60 +231,6 @@ export function DataProvider({ children }: { children: ReactNode }) {
     },
     []
   );
-
-  const connectSheet = useCallback(async (url: string) => {
-    const trimmed = url.trim();
-    if (!trimmed) return;
-    persistSheetUrl(trimmed);
-    setSheetUrlState(trimmed);
-    setPhase("syncing");
-    try {
-      await writeAllToSheet(trimmed, dbRef.current);
-      const now = new Date().toISOString();
-      persistLastSyncedAt(now);
-      setLastSyncedAtState(now);
-      setPhase("synced");
-      toast.success("Connected to Google Sheet");
-    } catch {
-      setPhase("error");
-      toast.error("Could not reach the Sheet. Check the URL and deployment.");
-    }
-  }, []);
-
-  const refreshFromSheet = useCallback(async () => {
-    if (!sheetUrl) return;
-    setPhase("syncing");
-    try {
-      const data = await readFromSheet(sheetUrl);
-      setDbState((prev) => {
-        const photoById = new Map(prev.purchases.map((p) => [p.id, p.photo]));
-        const purchases = Array.isArray(data.purchases)
-          ? data.purchases.map((p) => ({ ...p, photo: photoById.get(p.id) ?? "" }))
-          : prev.purchases;
-        return {
-          ...prev,
-          ...data,
-          purchases,
-          settings: { ...prev.settings, ...(data.settings ?? {}) },
-        };
-      });
-      const now = new Date().toISOString();
-      persistLastSyncedAt(now);
-      setLastSyncedAtState(now);
-      setPhase("synced");
-      toast.success("Refreshed from Google Sheet");
-    } catch {
-      setPhase("error");
-      toast.error("Refresh failed. Check your connection and Sheet URL.");
-    }
-  }, [sheetUrl]);
-
-  const disconnectSheet = useCallback(() => {
-    clearSheetUrl();
-    setSheetUrlState(null);
-    setPhase("offline");
-    toast.info("Disconnected from Google Sheet");
-  }, []);
 
   const backupJSON = useCallback(() => {
     const data = JSON.stringify(dbRef.current, null, 2);
@@ -214,15 +249,25 @@ export function DataProvider({ children }: { children: ReactNode }) {
     setLastBackupAtState(now);
   }, []);
 
+  // Erase/restore push immediately rather than waiting on the debounce, so
+  // Supabase is visibly cleared/repopulated right away instead of racing the
+  // next periodic poll.
   const restoreJSON = useCallback(async (file: File) => {
     const text = await file.text();
     const parsed = parseImportedDB(text);
     setDbState(parsed);
-  }, []);
+    dbRef.current = parsed;
+    setCanPush(true);
+    await pushNow();
+  }, [pushNow]);
 
-  const eraseAll = useCallback(() => {
-    setDbState(defaultDB());
-  }, []);
+  const eraseAll = useCallback(async () => {
+    const empty = defaultDB();
+    setDbState(empty);
+    dbRef.current = empty;
+    setCanPush(true);
+    await pushNow();
+  }, [pushNow]);
 
   return (
     <DataContext.Provider
@@ -230,12 +275,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
         db,
         hydrated,
         setDB,
-        sheetUrl,
         syncStatus,
         lastSyncedAt,
-        connectSheet,
-        refreshFromSheet,
-        disconnectSheet,
         backupJSON,
         restoreJSON,
         eraseAll,
