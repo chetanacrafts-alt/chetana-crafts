@@ -91,17 +91,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
     dbRef.current = db;
   }, [db]);
 
-  // Merges server data into local state, preserving purchase photos (which
-  // never leave the device — the server never has them).
+  // Merges server data into local state. Skipped entirely while a local
+  // edit is still unpushed (see the version check at each call site below),
+  // so this never has to reconcile a pending local change against it.
   const mergeFromServer = useCallback((data: ChetanaDB) => {
-    setDbState((prev) => {
-      const photoById = new Map(prev.purchases.map((p) => [p.id, p.photo]));
-      const purchases = data.purchases.map((p) => ({
-        ...p,
-        photo: photoById.get(p.id) ?? "",
-      }));
-      return { ...data, purchases };
-    });
+    setDbState(data);
   }, []);
 
   const pullFromServer = useCallback(

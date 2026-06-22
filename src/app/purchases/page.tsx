@@ -10,13 +10,24 @@ import {
 import { PurchaseHistory } from "@/components/purchases/purchase-history";
 import { nextStockCode, findStockByCode, resolveVariantCode } from "@/lib/codes";
 import { genId } from "@/lib/id";
+import { uploadPurchasePhoto } from "@/lib/photo-upload";
 import type { Expense, Purchase, PurchaseItem, StockItem } from "@/lib/types";
 
 export default function PurchasesPage() {
   const { db, setDB } = useData();
   const [formKey, setFormKey] = useState(0);
+  const [saving, setSaving] = useState(false);
 
-  function handleSubmit(data: PurchaseSubmission) {
+  async function handleSubmit(data: PurchaseSubmission) {
+    if (saving) return;
+    setSaving(true);
+    let photo = "";
+    try {
+      if (data.photo) photo = await uploadPurchasePhoto(data.photo);
+    } catch {
+      toast.error("Couldn't upload the bill photo — saving the purchase without it.");
+    }
+
     setDB((prev) => {
       let stock = [...prev.stock];
       const purchaseItems: PurchaseItem[] = [];
@@ -76,7 +87,7 @@ export default function PurchasesPage() {
         items: purchaseItems,
         total,
         extra: data.tripCost,
-        photo: data.photo,
+        photo,
       };
 
       const expenses: Expense[] = [
@@ -111,6 +122,7 @@ export default function PurchasesPage() {
 
     toast.success("Purchase recorded and stock updated");
     setFormKey((k) => k + 1);
+    setSaving(false);
   }
 
   function handleDelete(id: string) {

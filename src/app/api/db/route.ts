@@ -28,9 +28,6 @@ export async function GET() {
       const rows = (arrayResults[i].data ?? []) as Row[];
       (db[key] as unknown[]) = rows.map((r) => config.fromRow(r));
     });
-    db.purchases.forEach((p) => {
-      p.photo = "";
-    });
     db.settings = rowToSettings(settingsResult.data as Row | null);
 
     return NextResponse.json(db);

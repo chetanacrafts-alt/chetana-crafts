@@ -108,7 +108,9 @@ const EXPENSES: TableConfig<Expense> = {
   }),
 };
 
-// `photo` never leaves the device — excluded on write, always empty on read.
+// `photo` holds a Supabase Storage public URL (uploaded separately via
+// /api/photos before the purchase is saved) — never a raw data URL, so it
+// stays cheap to sync alongside the rest of the record.
 const PURCHASES: TableConfig<Purchase> = {
   table: "purchases",
   idField: "id",
@@ -120,6 +122,7 @@ const PURCHASES: TableConfig<Purchase> = {
     items: p.items,
     total: p.total,
     extra: p.extra,
+    photo: p.photo,
   }),
   fromRow: (r) => ({
     id: str(r.id),
@@ -129,7 +132,7 @@ const PURCHASES: TableConfig<Purchase> = {
     items: Array.isArray(r.items) ? (r.items as Purchase["items"]) : [],
     total: num(r.total),
     extra: num(r.extra),
-    photo: "",
+    photo: str(r.photo),
   }),
 };
 
