@@ -31,6 +31,7 @@ interface DataContextValue {
   hydrated: boolean;
   initialSyncAttempted: boolean;
   setDB: (updater: ChetanaDB | ((prev: ChetanaDB) => ChetanaDB)) => void;
+  syncNow: () => Promise<void>;
   syncStatus: SyncStatus;
   lastSyncedAt: string | null;
   backupJSON: () => void;
@@ -67,7 +68,6 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [initialSyncAttempted, setInitialSyncAttempted] = useState(false);
 
   const dbRef = useRef(db);
-  const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastPushAt = useRef(0);
   const pullInFlight = useRef(false);
@@ -244,34 +244,43 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }
   }, [isOnline]);
 
-  // Gated wrapper for the automatic debounced push — never fires before the
-  // first successful pull, so a fresh/stale local cache can't race ahead of
-  // reconciliation and overwrite the server (see canPush comment above).
+  // Gated wrapper for the automatic push — never fires before the first
+  // successful pull (so a fresh/stale local cache can't race ahead of
+  // reconciliation and overwrite the server, see canPush above), and never
+  // fires when there's no actual local edit to send (so reconciling a pull's
+  // data into `db` doesn't immediately echo it straight back to the server).
   const pushToServer = useCallback(async () => {
     if (!canPush) return;
+    if (localVersion.current === pushedVersion.current) return;
     await pushNow();
   }, [canPush, pushNow]);
 
-  // Debounced auto-push whenever data changes.
+  // Push immediately whenever data changes — every setDB call in this app is
+  // already the result of one deliberate user action (a form submit, a
+  // button click), not a stream of edits, so there's nothing to batch by
+  // waiting. Waiting used to mean: open WhatsApp (or do anything else that
+  // backgrounds the tab) right after saving, and the pending push could be
+  // starved before it ever fired — the save would stick locally but never
+  // reach Supabase. pushNow's own serialization already coalesces the rare
+  // case of several changes landing back-to-back.
   useEffect(() => {
     if (!hydrated || !isOnline || !canPush) return;
-    if (syncTimer.current) clearTimeout(syncTimer.current);
-    syncTimer.current = setTimeout(() => {
-      pushToServer();
-    }, 800);
-    return () => {
-      if (syncTimer.current) clearTimeout(syncTimer.current);
-    };
+    pushToServer();
   }, [db, hydrated, isOnline, canPush, pushToServer]);
 
+  // Computes the next value off dbRef (always synchronously current, unlike
+  // React state) and writes it back to dbRef immediately — so a caller that
+  // does `setDB(...); syncNow();` right before e.g. opening WhatsApp is
+  // guaranteed syncNow sees this update, without waiting on a render.
   const setDB = useCallback(
     (updater: ChetanaDB | ((prev: ChetanaDB) => ChetanaDB)) => {
       localVersion.current += 1;
-      setDbState((prev) =>
+      const next =
         typeof updater === "function"
-          ? (updater as (prev: ChetanaDB) => ChetanaDB)(prev)
-          : updater
-      );
+          ? (updater as (prev: ChetanaDB) => ChetanaDB)(dbRef.current)
+          : updater;
+      dbRef.current = next;
+      setDbState(next);
     },
     []
   );
@@ -322,6 +331,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         hydrated,
         initialSyncAttempted,
         setDB,
+        syncNow: pushNow,
         syncStatus,
         lastSyncedAt,
         backupJSON,

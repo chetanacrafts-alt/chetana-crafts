@@ -13,7 +13,7 @@ import type { BillPayload } from "@/lib/billing";
 import type { Order } from "@/lib/types";
 
 export default function BillPage() {
-  const { db, setDB, initialSyncAttempted } = useData();
+  const { db, setDB, syncNow, initialSyncAttempted } = useData();
   const [formKey, setFormKey] = useState(0);
   const [previewPayload, setPreviewPayload] = useState<BillPayload | null>(null);
   const [previewCommitted, setPreviewCommitted] = useState(false);
@@ -72,10 +72,14 @@ export default function BillPage() {
   }
 
   // Triggered by the form's own "Save as Order" button — saves immediately and
-  // auto-notifies via WhatsApp if the checkbox is ticked.
-  function handleSaveOrder(payload: BillPayload) {
+  // auto-notifies via WhatsApp if the checkbox is ticked. Awaits the sync
+  // before opening WhatsApp: on mobile that backgrounds the tab, and a save
+  // that's merely "in progress" can get starved before it reaches Supabase,
+  // leaving the bill saved on-device but invisible everywhere else.
+  async function handleSaveOrder(payload: BillPayload) {
     commitBill(payload);
     notifySavedToast(payload);
+    await syncNow();
 
     if (payload.notify) {
       if (payload.customer.phone.trim()) {
@@ -94,13 +98,15 @@ export default function BillPage() {
 
   // Triggered from inside the Preview dialog by either Download PDF or Send on
   // WhatsApp — whichever happens first commits the order. Idempotent, so
-  // clicking both buttons (or the same one twice) never double-saves.
-  function ensurePreviewSaved(payload: BillPayload) {
+  // clicking both buttons (or the same one twice) never double-saves. Resolves
+  // only once the save has actually reached Supabase (see handleSaveOrder).
+  async function ensurePreviewSaved(payload: BillPayload) {
     if (previewCommitted) return;
     commitBill(payload);
     setPreviewCommitted(true);
     notifySavedToast(payload);
     setFormKey((k) => k + 1);
+    await syncNow();
   }
 
   return (

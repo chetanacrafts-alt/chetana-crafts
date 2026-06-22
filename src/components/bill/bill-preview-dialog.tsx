@@ -29,7 +29,7 @@ interface BillPreviewDialogProps {
   payload: BillPayload | null;
   settings: BusinessSettings;
   committed: boolean;
-  onEnsureSaved: (payload: BillPayload) => void;
+  onEnsureSaved: (payload: BillPayload) => Promise<void>;
   onOpenChange: (open: boolean) => void;
 }
 
@@ -42,21 +42,32 @@ export function BillPreviewDialog({
 }: BillPreviewDialogProps) {
   const businessName = settings.name || "Chetana Crafts";
   const [generatingPdf, setGeneratingPdf] = useState(false);
+  const [sendingWhatsApp, setSendingWhatsApp] = useState(false);
 
+  // Awaiting the save (not just firing it) before downloading/opening
+  // WhatsApp matters specifically on mobile: opening WhatsApp backgrounds the
+  // browser tab, and a save that's only "in progress" can get starved before
+  // it reaches Supabase, leaving the bill saved on-device but invisible
+  // everywhere else.
   async function handleDownloadPdf() {
     if (!payload) return;
-    onEnsureSaved(payload);
     setGeneratingPdf(true);
     try {
+      await onEnsureSaved(payload);
       await downloadBillPDF(payload, settings);
     } finally {
       setGeneratingPdf(false);
     }
   }
 
-  function handleSendWhatsApp() {
+  async function handleSendWhatsApp() {
     if (!payload) return;
-    onEnsureSaved(payload);
+    setSendingWhatsApp(true);
+    try {
+      await onEnsureSaved(payload);
+    } finally {
+      setSendingWhatsApp(false);
+    }
     window.open(
       buildWhatsAppLink(payload.customer.phone, buildBillMessage(payload, settings)),
       "_blank"
@@ -222,10 +233,10 @@ export function BillPreviewDialog({
                 <Button
                   type="button"
                   onClick={handleSendWhatsApp}
-                  disabled={!payload.customer.phone.trim()}
+                  disabled={!payload.customer.phone.trim() || sendingWhatsApp}
                 >
                   <MessageCircle className="size-4" />
-                  Send on WhatsApp
+                  {sendingWhatsApp ? "Saving…" : "Send on WhatsApp"}
                 </Button>
               </div>
             </div>

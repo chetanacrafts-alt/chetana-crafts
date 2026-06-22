@@ -26,7 +26,7 @@ import { formatCurrency } from "@/lib/format";
 import type { Order } from "@/lib/types";
 
 export default function OrdersPage() {
-  const { db, setDB } = useData();
+  const { db, setDB, syncNow } = useData();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formKey, setFormKey] = useState(0);
   const [returnTarget, setReturnTarget] = useState<Order | null>(null);
@@ -45,7 +45,11 @@ export default function OrdersPage() {
     );
   }
 
-  function handleSubmit(input: OrderInput) {
+  // Awaits the sync before opening WhatsApp: on mobile that backgrounds the
+  // tab, and a save that's merely "in progress" can get starved before it
+  // reaches Supabase, leaving the order saved on-device but invisible
+  // everywhere else.
+  async function handleSubmit(input: OrderInput) {
     const order = buildOrderFromInput(input, editingId ?? undefined, editingOrder?.billNo ?? "");
 
     setDB((prev) => (editingId ? applyOrderEdit(prev, order) : applyOrder(prev, order)));
@@ -56,7 +60,10 @@ export default function OrdersPage() {
         : "Order saved"
     );
 
-    if (input.notify) notifyCustomer(order);
+    if (input.notify) {
+      await syncNow();
+      notifyCustomer(order);
+    }
 
     setEditingId(null);
     setFormKey((k) => k + 1);
