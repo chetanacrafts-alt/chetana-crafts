@@ -49,21 +49,30 @@ interface VariantRow {
   qty: string;
   cost: string;
   sell: string;
+  // Tracks whether this row's cost/sell was typed directly, so it stops
+  // following the article's shared price if the user overrides just this
+  // one colour — see updateArticleCost/Sell below.
+  costEdited: boolean;
+  sellEdited: boolean;
 }
 
 interface ArticleRow {
   uid: string;
   code: string;
   name: string;
+  // Shared cost/sell for the article — auto-fills every colour added under
+  // it, so adding many colours only means picking a swatch and a quantity.
+  cost: string;
+  sell: string;
   variants: VariantRow[];
 }
 
-function emptyVariant(): VariantRow {
-  return { uid: genId(), color: "", qty: "", cost: "", sell: "" };
+function emptyVariant(cost = "", sell = "", qty = ""): VariantRow {
+  return { uid: genId(), color: "", qty, cost, sell, costEdited: false, sellEdited: false };
 }
 
 function emptyArticle(): ArticleRow {
-  return { uid: genId(), code: "", name: "", variants: [emptyVariant()] };
+  return { uid: genId(), code: "", name: "", cost: "", sell: "", variants: [emptyVariant()] };
 }
 
 interface PurchaseFormProps {
@@ -85,6 +94,28 @@ export function PurchaseForm({ stock, onSubmit }: PurchaseFormProps) {
     setArticles((prev) => prev.map((a) => (a.uid === uid ? { ...a, ...patch } : a)));
   }
 
+  // Updates the article's shared price and cascades it into every colour
+  // row that hasn't been individually overridden.
+  function updateArticleCost(uid: string, cost: string) {
+    setArticles((prev) =>
+      prev.map((a) =>
+        a.uid === uid
+          ? { ...a, cost, variants: a.variants.map((v) => (v.costEdited ? v : { ...v, cost })) }
+          : a
+      )
+    );
+  }
+
+  function updateArticleSell(uid: string, sell: string) {
+    setArticles((prev) =>
+      prev.map((a) =>
+        a.uid === uid
+          ? { ...a, sell, variants: a.variants.map((v) => (v.sellEdited ? v : { ...v, sell })) }
+          : a
+      )
+    );
+  }
+
   function handleCodeChange(uid: string, code: string) {
     const match = code.trim() ? findStockByCode(stock, code) : undefined;
     setArticles((prev) =>
@@ -92,14 +123,18 @@ export function PurchaseForm({ stock, onSubmit }: PurchaseFormProps) {
         if (a.uid !== uid) return a;
         const next: ArticleRow = { ...a, code };
         if (match && !a.name) next.name = match.name;
+        if (match) {
+          next.cost = a.cost || String(match.cost);
+          next.sell = a.sell || String(match.sell);
+        }
         if (match && a.variants.length === 1) {
           const v = a.variants[0];
           next.variants = [
             {
               ...v,
               color: v.color || match.color,
-              cost: v.cost || String(match.cost),
-              sell: v.sell || String(match.sell),
+              cost: v.costEdited ? v.cost : v.cost || String(match.cost),
+              sell: v.sellEdited ? v.sell : v.sell || String(match.sell),
             },
           ];
         }
@@ -120,15 +155,34 @@ export function PurchaseForm({ stock, onSubmit }: PurchaseFormProps) {
     setArticles((prev) =>
       prev.map((a) =>
         a.uid === articleUid
-          ? { ...a, variants: a.variants.map((v) => (v.uid === variantUid ? { ...v, ...patch } : v)) }
+          ? {
+              ...a,
+              variants: a.variants.map((v) =>
+                v.uid === variantUid
+                  ? {
+                      ...v,
+                      ...patch,
+                      ...(patch.cost !== undefined ? { costEdited: true } : {}),
+                      ...(patch.sell !== undefined ? { sellEdited: true } : {}),
+                    }
+                  : v
+              ),
+            }
           : a
       )
     );
   }
 
+  // New colours start from the article's shared price and a quantity of 1 —
+  // the common case when one purchase brings in several colours of the same
+  // article, often one piece of each.
   function addVariant(articleUid: string) {
     setArticles((prev) =>
-      prev.map((a) => (a.uid === articleUid ? { ...a, variants: [...a.variants, emptyVariant()] } : a))
+      prev.map((a) =>
+        a.uid === articleUid
+          ? { ...a, variants: [...a.variants, emptyVariant(a.cost, a.sell, "1")] }
+          : a
+      )
     );
   }
 
@@ -191,9 +245,9 @@ export function PurchaseForm({ stock, onSubmit }: PurchaseFormProps) {
       <CardHeader>
         <CardTitle>Record Purchase</CardTitle>
         <CardDescription>
-          Each article adds to Stock — existing codes just restock quantity. Add
-          more than one colour under an article to track them as separate stock
-          rows under the same base code.
+          Each article adds to Stock — existing codes just restock quantity. Set
+          Cost/Sell once per article and add a colour at a time (e.g. one piece
+          each) — every new colour starts from that shared price.
         </CardDescription>
       </CardHeader>
       <form onSubmit={handleSubmit}>
@@ -265,6 +319,31 @@ export function PurchaseForm({ stock, onSubmit }: PurchaseFormProps) {
                       <Trash2 className="size-4 text-destructive" />
                       <span className="sr-only">Remove article</span>
                     </Button>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="flex flex-col gap-1">
+                      <Label className="text-xs text-muted-foreground">Cost/pc (all colours)</Label>
+                      <Input
+                        type="number"
+                        inputMode="decimal"
+                        min="0"
+                        value={article.cost}
+                        onChange={(e) => updateArticleCost(article.uid, e.target.value)}
+                        placeholder="0"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <Label className="text-xs text-muted-foreground">Sell/pc (all colours)</Label>
+                      <Input
+                        type="number"
+                        inputMode="decimal"
+                        min="0"
+                        value={article.sell}
+                        onChange={(e) => updateArticleSell(article.uid, e.target.value)}
+                        placeholder="0"
+                      />
+                    </div>
                   </div>
 
                   <div className="flex flex-col gap-2">
